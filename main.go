@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 
 	"github.com/drone/envsubst"
@@ -18,7 +20,7 @@ func main() {
 				}
 			}()
 
-			interpolated := []interface{}{}
+			enc := yaml.NewEncoder(os.Stdout)
 
 			for _, f := range c.Args().Slice() {
 				b, err := os.ReadFile(f)
@@ -26,29 +28,31 @@ func main() {
 					return errors.Wrapf(err, "while reading file %s", f)
 				}
 
-				var obj interface{}
+				dec := yaml.NewDecoder(bytes.NewReader(b))
 
-				err = yaml.Unmarshal(b, &obj)
-				if err != nil {
-					return errors.Wrapf(err, "while unmarshalling yaml file %s", f)
+				for {
+					var obj interface{}
+					err = dec.Decode(&obj)
+					if err == io.EOF {
+						break
+					}
+
+					if err != nil {
+						return errors.Wrapf(err, "while decoding yaml file %s", f)
+					}
+
+					iobj, err := interpolate(obj)
+					if err != nil {
+						return errors.Wrapf(err, "while interpolating values into %s", f)
+					}
+
+					err = enc.Encode(iobj)
+					if err != nil {
+						return errors.Wrap(err, "while encoding interpolated manifests")
+					}
+
 				}
 
-				iobj, err := interpolate(obj)
-				if err != nil {
-					return errors.Wrapf(err, "while interpolating values into %s", f)
-				}
-
-				interpolated = append(interpolated, iobj)
-
-			}
-
-			enc := yaml.NewEncoder(os.Stdout)
-
-			for _, io := range interpolated {
-				err = enc.Encode(io)
-				if err != nil {
-					return errors.Wrap(err, "while encoding interpolated manifests")
-				}
 			}
 			return nil
 		},
