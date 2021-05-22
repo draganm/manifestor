@@ -23,9 +23,18 @@ func main() {
 			enc := yaml.NewEncoder(os.Stdout)
 
 			for _, f := range c.Args().Slice() {
-				b, err := os.ReadFile(f)
-				if err != nil {
-					return errors.Wrapf(err, "while reading file %s", f)
+				var b []byte
+				if f == "-" {
+					b, err = io.ReadAll(os.Stdin)
+					if err != nil {
+						return errors.Wrap(err, "while reading from stdin")
+					}
+				} else {
+					b, err = os.ReadFile(f)
+					if err != nil {
+						return errors.Wrapf(err, "while reading file %s", f)
+					}
+
 				}
 
 				dec := yaml.NewDecoder(bytes.NewReader(b))
