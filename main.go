@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
+	"github.com/dop251/goja"
 	"github.com/drone/envsubst"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v3"
@@ -13,12 +15,54 @@ import (
 
 func main() {
 	app := &cli.App{
+		Flags: []cli.Flag{
+			&cli.StringSliceFlag{
+				Name:    "processors",
+				EnvVars: []string{"PROCESSORS"},
+				Value:   &cli.StringSlice{},
+			},
+		},
 		Action: func(c *cli.Context) (err error) {
 			defer func() {
 				if err != nil {
 					err = cli.NewExitError(err.Error(), 1)
 				}
 			}()
+
+			env := map[string]string{}
+
+			for _, e := range os.Environ() {
+
+				kv := strings.SplitN(e, "=", 2)
+				if len(kv) != 2 {
+					return fmt.Errorf("while splitting env %q - got %d parts", e, len(kv))
+				}
+
+				env[kv[0]] = kv[1]
+			}
+
+			vm := goja.New()
+
+			for _, p := range c.StringSlice("processors") {
+				script, err := os.ReadFile(p)
+				if err != nil {
+					return fmt.Errorf("while reading script %s: %w", p, err)
+				}
+				vm.RunScript(p, string(script))
+			}
+			vm.Set("env", env)
+
+			var processors []func(interface{}) error
+
+			for _, k := range vm.GlobalObject().Keys() {
+				v := vm.GlobalObject().Get(k)
+				var fn func(interface{}) error
+				err = vm.ExportTo(v, &fn)
+				if err != nil {
+					continue
+				}
+				processors = append(processors, fn)
+			}
 
 			enc := yaml.NewEncoder(os.Stdout)
 
@@ -48,6 +92,13 @@ func main() {
 
 					if err != nil {
 						return fmt.Errorf("while decoding yaml file %s: %w", f, err)
+					}
+
+					for _, p := range processors {
+						err = p(obj)
+						if err != nil {
+							return fmt.Errorf("while processing %s: %w", f, err)
+						}
 					}
 
 					iobj, err := interpolate(obj)
