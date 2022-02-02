@@ -2,11 +2,11 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 
 	"github.com/drone/envsubst"
-	"github.com/pkg/errors"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v3"
 )
@@ -27,12 +27,12 @@ func main() {
 				if f == "-" {
 					b, err = io.ReadAll(os.Stdin)
 					if err != nil {
-						return errors.Wrap(err, "while reading from stdin")
+						return fmt.Errorf("while reading from stdin: %w", err)
 					}
 				} else {
 					b, err = os.ReadFile(f)
 					if err != nil {
-						return errors.Wrapf(err, "while reading file %s", f)
+						return fmt.Errorf("while reading file %s: %w", f, err)
 					}
 
 				}
@@ -47,17 +47,17 @@ func main() {
 					}
 
 					if err != nil {
-						return errors.Wrapf(err, "while decoding yaml file %s", f)
+						return fmt.Errorf("while decoding yaml file %s: %w", f, err)
 					}
 
 					iobj, err := interpolate(obj)
 					if err != nil {
-						return errors.Wrapf(err, "while interpolating values into %s", f)
+						return fmt.Errorf("while interpolating values into %s: %w", f, err)
 					}
 
 					err = enc.Encode(iobj)
 					if err != nil {
-						return errors.Wrap(err, "while encoding interpolated manifests")
+						return fmt.Errorf("while encoding interpolated manifests: %w", err)
 					}
 
 				}
@@ -77,7 +77,7 @@ func interpolate(o interface{}) (interface{}, error) {
 		for mk, mv := range v {
 			nv, err := interpolate(mv)
 			if err != nil {
-				return nil, errors.Wrapf(err, "while interpolating map value for key %q", mk)
+				return nil, fmt.Errorf("while interpolating map value for key %q: %w", mk, err)
 			}
 			nm[mk] = nv
 		}
@@ -87,7 +87,7 @@ func interpolate(o interface{}) (interface{}, error) {
 		for i, sv := range v {
 			nv, err := interpolate(sv)
 			if err != nil {
-				return nil, errors.Wrapf(err, "while interpolating slice value with index %d", i)
+				return nil, fmt.Errorf("while interpolating slice value with index %d: %w", i, err)
 			}
 			ns[i] = nv
 		}
