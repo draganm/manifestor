@@ -52,16 +52,33 @@ func main() {
 			}
 			vm.Set("env", env)
 
-			var processors []func(interface{}) error
+			var preProcessors []func(interface{}) error
+			var postProcessors []func(interface{}) error
 
 			for _, k := range vm.GlobalObject().Keys() {
-				v := vm.GlobalObject().Get(k)
-				var fn func(interface{}) error
-				err = vm.ExportTo(v, &fn)
-				if err != nil {
-					continue
+
+				if strings.HasPrefix(k, "pre") {
+					v := vm.GlobalObject().Get(k)
+
+					var fn func(interface{}) error
+					err = vm.ExportTo(v, &fn)
+					if err != nil {
+						continue
+					}
+					preProcessors = append(preProcessors, wrap(k, fn))
 				}
-				processors = append(processors, fn)
+
+				if strings.HasPrefix(k, "post") {
+					v := vm.GlobalObject().Get(k)
+					var fn func(interface{}) error
+					err = vm.ExportTo(v, &fn)
+					if err != nil {
+						fmt.Println("err", err)
+						continue
+					}
+					postProcessors = append(postProcessors, wrap(k, fn))
+				}
+
 			}
 
 			enc := yaml.NewEncoder(os.Stdout)
@@ -94,16 +111,23 @@ func main() {
 						return fmt.Errorf("while decoding yaml file %s: %w", f, err)
 					}
 
-					for _, p := range processors {
+					for _, p := range preProcessors {
 						err = p(obj)
 						if err != nil {
-							return fmt.Errorf("while processing %s: %w", f, err)
+							return fmt.Errorf("while pre processing %s: %w", f, err)
 						}
 					}
 
 					iobj, err := interpolate(obj)
 					if err != nil {
 						return fmt.Errorf("while interpolating values into %s: %w", f, err)
+					}
+
+					for _, p := range postProcessors {
+						err = p(iobj)
+						if err != nil {
+							return fmt.Errorf("while post processing %s: %w", f, err)
+						}
 					}
 
 					err = enc.Encode(iobj)
