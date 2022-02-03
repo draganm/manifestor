@@ -17,9 +17,8 @@ func main() {
 	app := &cli.App{
 		Flags: []cli.Flag{
 			&cli.StringSliceFlag{
-				Name:    "processors",
+				Name:    "processor",
 				EnvVars: []string{"PROCESSORS"},
-				Value:   &cli.StringSlice{},
 			},
 		},
 		Action: func(c *cli.Context) (err error) {
@@ -43,14 +42,24 @@ func main() {
 
 			vm := goja.New()
 
-			for _, p := range c.StringSlice("processors") {
+			for _, p := range c.StringSlice("processor") {
 				script, err := os.ReadFile(p)
 				if err != nil {
 					return fmt.Errorf("while reading script %s: %w", p, err)
 				}
 				vm.RunScript(p, string(script))
 			}
+
 			vm.Set("env", env)
+
+			vm.Set("parseYaml", func(docString string) (interface{}, error) {
+				var v interface{}
+				err := yaml.NewDecoder(strings.NewReader(docString)).Decode(&v)
+				if err != nil {
+					return nil, err
+				}
+				return v, nil
+			})
 
 			var preProcessors []func(interface{}) error
 			var postProcessors []func(interface{}) error
