@@ -5,10 +5,12 @@ Unlike many other templating mechanisms, this utility will never output an inval
 
 Under the hood, it parses the input yaml files, finds string values, interpolates environment values into them using bash-like interpolation syntax and then re-assembles the resulting YAML(s) that are printed on stdout.
 
+Also, there is an option of executing pre and post interpolation processors in ECMAScript 5.1(+).
+
 ## Use
 
 ```bash
-$ VAR=VALUE manifestor [<yaml file> ...] | kubectl apply -f -
+$ VAR=VALUE manifestor [--processors=] [<yaml file> ...] | kubectl apply -f -
 ```
 
 ## Interpolation format
@@ -62,3 +64,23 @@ spec:
                     servicePort: 3030
                   path: /api
 ```
+
+## Pre and post interpolation processors
+
+String interpolation of environment variables is quite limited.
+It won't cater for the cases where a number, boolean value or a whole sub-object needs to be changed, inserted or deleted.
+In order to cover those cases, we support executing so-called _processors_.
+
+A _processor_ is a JavaScript function that takes an object representing one entity from the manifest and can change it in place.
+
+### Naming convention
+
+TODO
+
+### Available functions
+
+TODO
+
+### Available objects
+
+TODO

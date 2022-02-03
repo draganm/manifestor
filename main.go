@@ -2,23 +2,93 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
+	"strings"
 
+	"github.com/dop251/goja"
 	"github.com/drone/envsubst"
-	"github.com/pkg/errors"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v3"
 )
 
 func main() {
 	app := &cli.App{
+		Flags: []cli.Flag{
+			&cli.StringSliceFlag{
+				Name:    "processor",
+				EnvVars: []string{"PROCESSORS"},
+			},
+		},
 		Action: func(c *cli.Context) (err error) {
 			defer func() {
 				if err != nil {
 					err = cli.NewExitError(err.Error(), 1)
 				}
 			}()
+
+			env := map[string]string{}
+
+			for _, e := range os.Environ() {
+
+				kv := strings.SplitN(e, "=", 2)
+				if len(kv) != 2 {
+					return fmt.Errorf("while splitting env %q - got %d parts", e, len(kv))
+				}
+
+				env[kv[0]] = kv[1]
+			}
+
+			vm := goja.New()
+
+			for _, p := range c.StringSlice("processor") {
+				script, err := os.ReadFile(p)
+				if err != nil {
+					return fmt.Errorf("while reading script %s: %w", p, err)
+				}
+				vm.RunScript(p, string(script))
+			}
+
+			vm.Set("env", env)
+
+			vm.Set("parseYaml", func(docString string) (interface{}, error) {
+				var v interface{}
+				err := yaml.NewDecoder(strings.NewReader(docString)).Decode(&v)
+				if err != nil {
+					return nil, err
+				}
+				return v, nil
+			})
+
+			var preProcessors []func(interface{}) error
+			var postProcessors []func(interface{}) error
+
+			for _, k := range vm.GlobalObject().Keys() {
+
+				if strings.HasPrefix(k, "pre") {
+					v := vm.GlobalObject().Get(k)
+
+					var fn func(interface{}) error
+					err = vm.ExportTo(v, &fn)
+					if err != nil {
+						continue
+					}
+					preProcessors = append(preProcessors, wrap(k, fn))
+				}
+
+				if strings.HasPrefix(k, "post") {
+					v := vm.GlobalObject().Get(k)
+					var fn func(interface{}) error
+					err = vm.ExportTo(v, &fn)
+					if err != nil {
+						fmt.Println("err", err)
+						continue
+					}
+					postProcessors = append(postProcessors, wrap(k, fn))
+				}
+
+			}
 
 			enc := yaml.NewEncoder(os.Stdout)
 
@@ -27,12 +97,12 @@ func main() {
 				if f == "-" {
 					b, err = io.ReadAll(os.Stdin)
 					if err != nil {
-						return errors.Wrap(err, "while reading from stdin")
+						return fmt.Errorf("while reading from stdin: %w", err)
 					}
 				} else {
 					b, err = os.ReadFile(f)
 					if err != nil {
-						return errors.Wrapf(err, "while reading file %s", f)
+						return fmt.Errorf("while reading file %s: %w", f, err)
 					}
 
 				}
@@ -47,17 +117,31 @@ func main() {
 					}
 
 					if err != nil {
-						return errors.Wrapf(err, "while decoding yaml file %s", f)
+						return fmt.Errorf("while decoding yaml file %s: %w", f, err)
+					}
+
+					for _, p := range preProcessors {
+						err = p(obj)
+						if err != nil {
+							return fmt.Errorf("while pre processing %s: %w", f, err)
+						}
 					}
 
 					iobj, err := interpolate(obj)
 					if err != nil {
-						return errors.Wrapf(err, "while interpolating values into %s", f)
+						return fmt.Errorf("while interpolating values into %s: %w", f, err)
+					}
+
+					for _, p := range postProcessors {
+						err = p(iobj)
+						if err != nil {
+							return fmt.Errorf("while post processing %s: %w", f, err)
+						}
 					}
 
 					err = enc.Encode(iobj)
 					if err != nil {
-						return errors.Wrap(err, "while encoding interpolated manifests")
+						return fmt.Errorf("while encoding interpolated manifests: %w", err)
 					}
 
 				}
@@ -77,7 +161,7 @@ func interpolate(o interface{}) (interface{}, error) {
 		for mk, mv := range v {
 			nv, err := interpolate(mv)
 			if err != nil {
-				return nil, errors.Wrapf(err, "while interpolating map value for key %q", mk)
+				return nil, fmt.Errorf("while interpolating map value for key %q: %w", mk, err)
 			}
 			nm[mk] = nv
 		}
@@ -87,7 +171,7 @@ func interpolate(o interface{}) (interface{}, error) {
 		for i, sv := range v {
 			nv, err := interpolate(sv)
 			if err != nil {
-				return nil, errors.Wrapf(err, "while interpolating slice value with index %d", i)
+				return nil, fmt.Errorf("while interpolating slice value with index %d: %w", i, err)
 			}
 			ns[i] = nv
 		}
