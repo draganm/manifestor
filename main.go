@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -59,6 +60,18 @@ func main() {
 					return nil, err
 				}
 				return v, nil
+			})
+
+			vm.Set("base64Encode", func(val string) string {
+				return base64.StdEncoding.EncodeToString([]byte(val))
+			})
+
+			vm.Set("base64Decode", func(val string) (string, error) {
+				d, err := base64.StdEncoding.DecodeString(val)
+				if err != nil {
+					return "", err
+				}
+				return string(d), nil
 			})
 
 			var preProcessors []func(interface{}) error
