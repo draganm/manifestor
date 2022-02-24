@@ -29,7 +29,7 @@ func main() {
 				}
 			}()
 
-			env := map[string]string{}
+			vm := goja.New()
 
 			for _, e := range os.Environ() {
 
@@ -38,10 +38,8 @@ func main() {
 					return fmt.Errorf("while splitting env %q - got %d parts", e, len(kv))
 				}
 
-				env[kv[0]] = kv[1]
+				vm.Set(kv[0], kv[1])
 			}
-
-			vm := goja.New()
 
 			for _, p := range c.StringSlice("processor") {
 				script, err := os.ReadFile(p)
@@ -51,16 +49,25 @@ func main() {
 				vm.RunScript(p, string(script))
 			}
 
-			vm.Set("env", env)
+			YAML := map[string]interface{}{
+				"parse": func(docString string) (interface{}, error) {
+					var v interface{}
+					err = yaml.Unmarshal([]byte(docString), &v)
+					if err != nil {
+						return nil, err
+					}
+					return v, nil
+				},
+				"stringify": func(d interface{}) (string, error) {
+					enc, err := yaml.Marshal(d)
+					if err != nil {
+						return "", err
+					}
+					return string(enc), nil
+				},
+			}
 
-			vm.Set("parseYaml", func(docString string) (interface{}, error) {
-				var v interface{}
-				err := yaml.NewDecoder(strings.NewReader(docString)).Decode(&v)
-				if err != nil {
-					return nil, err
-				}
-				return v, nil
-			})
+			vm.Set("YAML", YAML)
 
 			vm.Set("base64Encode", func(val string) string {
 				return base64.StdEncoding.EncodeToString([]byte(val))
@@ -79,7 +86,7 @@ func main() {
 
 			for _, k := range vm.GlobalObject().Keys() {
 
-				if strings.HasPrefix(k, "pre") {
+				if strings.HasPrefix(k, "pre_") {
 					v := vm.GlobalObject().Get(k)
 
 					var fn func(interface{}) error
@@ -90,12 +97,11 @@ func main() {
 					preProcessors = append(preProcessors, wrap(k, fn))
 				}
 
-				if strings.HasPrefix(k, "post") {
+				if strings.HasPrefix(k, "post_") {
 					v := vm.GlobalObject().Get(k)
 					var fn func(interface{}) error
 					err = vm.ExportTo(v, &fn)
 					if err != nil {
-						fmt.Println("err", err)
 						continue
 					}
 					postProcessors = append(postProcessors, wrap(k, fn))
@@ -122,6 +128,8 @@ func main() {
 
 				dec := yaml.NewDecoder(bytes.NewReader(b))
 
+				in := interpolator{vm: vm}
+
 				for {
 					var obj interface{}
 					err = dec.Decode(&obj)
@@ -140,7 +148,7 @@ func main() {
 						}
 					}
 
-					iobj, err := interpolate(obj)
+					iobj, err := in.interpolate(obj)
 					if err != nil {
 						return fmt.Errorf("while interpolating values into %s: %w", f, err)
 					}
@@ -166,13 +174,17 @@ func main() {
 	app.Run(os.Args)
 }
 
-func interpolate(o interface{}) (interface{}, error) {
+type interpolator struct {
+	vm *goja.Runtime
+}
+
+func (in *interpolator) interpolate(o interface{}) (interface{}, error) {
 
 	switch v := o.(type) {
 	case map[string]interface{}:
 		nm := make(map[string]interface{}, len(v))
 		for mk, mv := range v {
-			nv, err := interpolate(mv)
+			nv, err := in.interpolate(mv)
 			if err != nil {
 				return nil, fmt.Errorf("while interpolating map value for key %q: %w", mk, err)
 			}
@@ -182,7 +194,7 @@ func interpolate(o interface{}) (interface{}, error) {
 	case []interface{}:
 		ns := make([]interface{}, len(v))
 		for i, sv := range v {
-			nv, err := interpolate(sv)
+			nv, err := in.interpolate(sv)
 			if err != nil {
 				return nil, fmt.Errorf("while interpolating slice value with index %d: %w", i, err)
 			}
@@ -190,8 +202,34 @@ func interpolate(o interface{}) (interface{}, error) {
 		}
 		return ns, nil
 	case string:
+		if strings.HasPrefix(v, "$$JS:") {
+			return in.interpolateJS(v[len("$$JS:"):])
+		}
 		return envsubst.EvalEnv(v)
 	default:
 		return o, nil
 	}
+}
+
+func (i *interpolator) interpolateJS(code string) (res interface{}, err error) {
+	defer func() {
+		p := recover()
+		if p != nil {
+			var ok bool
+			err, ok = p.(error)
+			if !ok {
+				err = fmt.Errorf("panic: %s", p)
+			}
+		}
+		if err != nil {
+			err = fmt.Errorf("while interpolating JS %q: %w", code, err)
+		}
+	}()
+
+	resVal, err := i.vm.RunString(code)
+	if err != nil {
+		return nil, err
+	}
+
+	return resVal.Export(), nil
 }
