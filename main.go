@@ -171,7 +171,7 @@ func main() {
 			return nil
 		},
 	}
-	app.Run(os.Args)
+	app.RunAndExitOnError()
 }
 
 type interpolator struct {
