@@ -31,6 +31,7 @@ func main() {
 
 			vm := goja.New()
 
+			env := map[string]string{}
 			for _, e := range os.Environ() {
 
 				kv := strings.SplitN(e, "=", 2)
@@ -38,8 +39,11 @@ func main() {
 					return fmt.Errorf("while splitting env %q - got %d parts", e, len(kv))
 				}
 
-				vm.Set(kv[0], kv[1])
+				env[kv[0]] = kv[1]
+
 			}
+
+			vm.Set("env", env)
 
 			for _, p := range c.StringSlice("processor") {
 				script, err := os.ReadFile(p)

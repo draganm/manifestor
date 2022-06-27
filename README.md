@@ -73,6 +73,30 @@ In order to cover those cases, we support executing so-called _processors_.
 
 A _processor_ is a JavaScript function that takes an object representing one entity from the manifest and can change it in place.
 
+## Interpolating JS objects directly in yaml
+
+If a more complex object has to be interpolated, any string value starting with `$$JS:` will get evaluated and the result of the evaluation will replace the original string.
+
+e.g.
+
+```yaml
+abc: '$$JS: env.GREEN_EGGS_ONLY ? "green eggs" : ["green eggs", "ham"]'
+```
+
+will evaluate to:
+```yaml
+abc: green eggs
+```
+if environment variable `GREEN_EGGS_ONLY` is not set or it has an empty value.
+
+In any other case, the result of the evaluation will be:
+```yaml
+abc:
+    - green eggs
+    - ham
+```
+
+
 ### Naming convention
 
 TODO
@@ -83,4 +107,6 @@ TODO
 
 ### Available objects
 
-TODO
+### `env`
+
+`env` contains environment variables passed to the process as key/value object
