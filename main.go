@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/dop251/goja"
 	"github.com/draganm/manifestor/interpolate"
@@ -16,7 +17,6 @@ func main() {
 		Flags: []cli.Flag{},
 		Action: func(c *cli.Context) (err error) {
 
-			fmt.Println("x")
 			manifestorDir, err := findDotManifestorDir("")
 			if err != nil {
 				return err
@@ -32,6 +32,18 @@ func main() {
 			encoder := yaml.NewEncoder(os.Stdout)
 
 			vm := goja.New()
+
+			env := map[string]string{}
+
+			for _, ev := range os.Environ() {
+				name, value, found := strings.Cut(ev, "=")
+				if found {
+					env[name] = value
+				}
+			}
+
+			vm.GlobalObject().Set("env", env)
+
 			vm.GlobalObject().Set("render", func(name string, values map[string]any) error {
 				templateName := filepath.Join(manifestorDir, "templates", name)
 				td, err := os.ReadFile(templateName)
