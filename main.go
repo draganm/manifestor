@@ -8,6 +8,7 @@ import (
 
 	"github.com/dop251/goja"
 	"github.com/draganm/manifestor/interpolate"
+	"github.com/go-git/go-git/v5"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v3"
 )
@@ -16,6 +17,23 @@ func main() {
 	app := &cli.App{
 		Flags: []cli.Flag{},
 		Action: func(c *cli.Context) (err error) {
+
+			repo, err := git.PlainOpenWithOptions("", &git.PlainOpenOptions{DetectDotGit: true})
+			if err != nil {
+				return fmt.Errorf("could not open git repo: %w", err)
+			}
+
+			head, err := repo.Head()
+			if err != nil {
+				return fmt.Errorf("could not get git head: %w", err)
+			}
+
+			fmt.Println("head commit", head.Hash().String())
+
+			gitValues := map[string]string{
+				"headSha":      head.Hash().String(),
+				"headShaShort": head.Hash().String()[:7],
+			}
 
 			manifestorDir, err := findDotManifestorDir("")
 			if err != nil {
@@ -43,6 +61,7 @@ func main() {
 			}
 
 			vm.GlobalObject().Set("env", env)
+			vm.GlobalObject().Set("git", gitValues)
 
 			vm.GlobalObject().Set("render", func(name string, values map[string]any) error {
 				templateName := filepath.Join(manifestorDir, "templates", name)
