@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: "${hostnames.join(',')}"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  name: ${name}
+spec:
+  ingressClassName: nginx
+  rules:
+    _forEach: ${hostnames}
+    _template:
+      host: ${eachValue}
+      http:
+        paths:
+          - backend:
+              service:
+                name: ${eachValue}
+                port:
+                  name: http
+            path: /
+            pathType: ImplementationSpecific
+  tls:
+    - hosts: ${hostnames}
+      secretName: nin-home-netice9-com-tls

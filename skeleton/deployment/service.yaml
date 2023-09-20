@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    name: nin-home
+  name: nin-home
+spec:
+  ports:
+    - name: http
+      port: 5001
+      protocol: TCP
+      targetPort: http
+  selector:
+    app: nin-home
+  sessionAffinity: None
+  type: ClusterIP

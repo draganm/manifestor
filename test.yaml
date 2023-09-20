@@ -1,0 +1,4 @@
+abc: '$$JS: env.GREEN_EGGS_ONLY ? "green eggs" : ["green eggs", "ham"]'
+#foo
+
+
