@@ -63,13 +63,13 @@ func main() {
 			vm.GlobalObject().Set("env", env)
 			vm.GlobalObject().Set("git", gitValues)
 
-			vm.GlobalObject().Set("render", func(name string, values map[string]any) error {
+			vm.GlobalObject().Set("render", func(name string, values map[string]any, fileName string) error {
 				templateName := filepath.Join(manifestorDir, "templates", name)
 				td, err := os.ReadFile(templateName)
 				if err != nil {
 					return fmt.Errorf("could not read template %s: %w", name, err)
 				}
-				err = interpolate.Interpolate(string(td), templateName, values, encoder)
+				err = interpolate.Interpolate(string(td), fileName, values, encoder)
 				if err != nil {
 					return fmt.Errorf("file %s: %w", name, err)
 				}
