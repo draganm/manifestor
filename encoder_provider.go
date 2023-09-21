@@ -34,7 +34,7 @@ func manifestorProvider(outDir string) func(name string) (*yaml.Encoder, func() 
 			}
 		}
 
-		f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY, 0777)
+		f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0777)
 
 		if err != nil {
 			return nil, nil, fmt.Errorf("could not open output file: %w", err)
