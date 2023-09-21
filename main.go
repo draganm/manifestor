@@ -10,12 +10,19 @@ import (
 	"github.com/draganm/manifestor/interpolate"
 	"github.com/go-git/go-git/v5"
 	"github.com/urfave/cli/v2"
-	"gopkg.in/yaml.v3"
 )
 
 func main() {
 	app := &cli.App{
-		Flags: []cli.Flag{},
+		Description: "generates k8s manifests from template and code",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "out",
+				Aliases: []string{"o"},
+				Usage:   "output directory",
+				EnvVars: []string{"OUTPUT_DIR"},
+			},
+		},
 		Action: func(c *cli.Context) (err error) {
 
 			repo, err := git.PlainOpenWithOptions("", &git.PlainOpenOptions{DetectDotGit: true})
@@ -28,8 +35,8 @@ func main() {
 				return fmt.Errorf("could not get git head: %w", err)
 			}
 
-			fmt.Println("head commit", head.Hash().String())
-
+			outputIsSet := c.IsSet("out")
+			mp := manifestorProvider(c.String("out"))
 			gitValues := map[string]string{
 				"headSha":      head.Hash().String(),
 				"headShaShort": head.Hash().String()[:7],
@@ -46,8 +53,6 @@ func main() {
 			if err != nil {
 				return fmt.Errorf("could not read manifestor.js: %w", err)
 			}
-
-			encoder := yaml.NewEncoder(os.Stdout)
 
 			vm := goja.New()
 
@@ -69,7 +74,19 @@ func main() {
 				if err != nil {
 					return fmt.Errorf("could not read template %s: %w", name, err)
 				}
-				err = interpolate.Interpolate(string(td), fileName, values, encoder)
+				encoder, done, err := mp(fileName)
+				if err != nil {
+					return fmt.Errorf("could not create encoder: %w", err)
+				}
+
+				defer done()
+
+				commentName := fileName
+				if outputIsSet {
+					commentName = ""
+				}
+
+				err = interpolate.Interpolate(string(td), commentName, values, encoder)
 				if err != nil {
 					return fmt.Errorf("file %s: %w", name, err)
 				}
@@ -108,8 +125,6 @@ func findDotManifestorDir(path string) (string, error) {
 
 		if os.IsNotExist(err) {
 			parent := filepath.Dir(fullPath)
-
-			fmt.Println(parent, fullPath)
 
 			if parent == fullPath {
 				return "", fmt.Errorf("could not find .manifestor directory in any parent of %s", fullPath)
