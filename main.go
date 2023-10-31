@@ -1,239 +1,147 @@
 package main
 
 import (
-	"bytes"
-	"encoding/base64"
 	"fmt"
-	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/dop251/goja"
-	"github.com/drone/envsubst"
+	"github.com/draganm/manifestor/interpolate"
+	"github.com/go-git/go-git/v5"
 	"github.com/urfave/cli/v2"
-	"gopkg.in/yaml.v3"
 )
 
 func main() {
 	app := &cli.App{
+		Description: "generates k8s manifests from template and code",
 		Flags: []cli.Flag{
-			&cli.StringSliceFlag{
-				Name:    "processor",
-				EnvVars: []string{"PROCESSORS"},
+			&cli.StringFlag{
+				Name:    "out",
+				Aliases: []string{"o"},
+				Usage:   "output directory",
+				EnvVars: []string{"OUTPUT_DIR"},
 			},
 		},
 		Action: func(c *cli.Context) (err error) {
-			defer func() {
-				if err != nil {
-					err = cli.NewExitError(err.Error(), 1)
-				}
-			}()
+
+			repo, err := git.PlainOpenWithOptions("", &git.PlainOpenOptions{DetectDotGit: true})
+			if err != nil {
+				return fmt.Errorf("could not open git repo: %w", err)
+			}
+
+			head, err := repo.Head()
+			if err != nil {
+				return fmt.Errorf("could not get git head: %w", err)
+			}
+
+			outputIsSet := c.IsSet("out")
+			mp := manifestorProvider(c.String("out"))
+			gitValues := map[string]string{
+				"headSha":      head.Hash().String(),
+				"headShaShort": head.Hash().String()[:7],
+			}
+
+			manifestorDir, err := findDotManifestorDir("")
+			if err != nil {
+				return err
+			}
+
+			manifestorJS := filepath.Join(manifestorDir, "manifestor.js")
+
+			mfjsd, err := os.ReadFile(manifestorJS)
+			if err != nil {
+				return fmt.Errorf("could not read manifestor.js: %w", err)
+			}
 
 			vm := goja.New()
 
 			env := map[string]string{}
-			for _, e := range os.Environ() {
 
-				kv := strings.SplitN(e, "=", 2)
-				if len(kv) != 2 {
-					return fmt.Errorf("while splitting env %q - got %d parts", e, len(kv))
+			for _, ev := range os.Environ() {
+				name, value, found := strings.Cut(ev, "=")
+				if found {
+					env[name] = value
 				}
-
-				env[kv[0]] = kv[1]
-
 			}
 
-			vm.Set("env", env)
+			vm.GlobalObject().Set("env", env)
+			vm.GlobalObject().Set("git", gitValues)
 
-			for _, p := range c.StringSlice("processor") {
-				script, err := os.ReadFile(p)
+			vm.GlobalObject().Set("render", func(name string, values map[string]any, fileName string) error {
+				templateName := filepath.Join(manifestorDir, "templates", name)
+				td, err := os.ReadFile(templateName)
 				if err != nil {
-					return fmt.Errorf("while reading script %s: %w", p, err)
+					return fmt.Errorf("could not read template %s: %w", name, err)
 				}
-				vm.RunScript(p, string(script))
-			}
+				encoder, done, err := mp(fileName)
+				if err != nil {
+					return fmt.Errorf("could not create encoder: %w", err)
+				}
 
-			YAML := map[string]interface{}{
-				"parse": func(docString string) (interface{}, error) {
-					var v interface{}
-					err = yaml.Unmarshal([]byte(docString), &v)
-					if err != nil {
-						return nil, err
-					}
-					return v, nil
-				},
-				"stringify": func(d interface{}) (string, error) {
-					enc, err := yaml.Marshal(d)
-					if err != nil {
-						return "", err
-					}
-					return string(enc), nil
-				},
-			}
+				defer done()
 
-			vm.Set("YAML", YAML)
+				commentName := fileName
+				if outputIsSet {
+					commentName = ""
+				}
 
-			vm.Set("base64Encode", func(val string) string {
-				return base64.StdEncoding.EncodeToString([]byte(val))
+				err = interpolate.Interpolate(string(td), commentName, values, encoder)
+				if err != nil {
+					return fmt.Errorf("file %s: %w", name, err)
+				}
+				return nil
 			})
 
-			vm.Set("base64Decode", func(val string) (string, error) {
-				d, err := base64.StdEncoding.DecodeString(val)
-				if err != nil {
-					return "", err
-				}
-				return string(d), nil
-			})
+			_, err = vm.RunScript("manifestor.js", string(mfjsd))
 
-			var preProcessors []func(interface{}) error
-			var postProcessors []func(interface{}) error
-
-			for _, k := range vm.GlobalObject().Keys() {
-
-				if strings.HasPrefix(k, "pre_") {
-					v := vm.GlobalObject().Get(k)
-
-					var fn func(interface{}) error
-					err = vm.ExportTo(v, &fn)
-					if err != nil {
-						continue
-					}
-					preProcessors = append(preProcessors, wrap(k, fn))
-				}
-
-				if strings.HasPrefix(k, "post_") {
-					v := vm.GlobalObject().Get(k)
-					var fn func(interface{}) error
-					err = vm.ExportTo(v, &fn)
-					if err != nil {
-						continue
-					}
-					postProcessors = append(postProcessors, wrap(k, fn))
-				}
-
-			}
-
-			enc := yaml.NewEncoder(os.Stdout)
-
-			for _, f := range c.Args().Slice() {
-				var b []byte
-				if f == "-" {
-					b, err = io.ReadAll(os.Stdin)
-					if err != nil {
-						return fmt.Errorf("while reading from stdin: %w", err)
-					}
-				} else {
-					b, err = os.ReadFile(f)
-					if err != nil {
-						return fmt.Errorf("while reading file %s: %w", f, err)
-					}
-
-				}
-
-				dec := yaml.NewDecoder(bytes.NewReader(b))
-
-				in := interpolator{vm: vm}
-
-				for {
-					var obj interface{}
-					err = dec.Decode(&obj)
-					if err == io.EOF {
-						break
-					}
-
-					if err != nil {
-						return fmt.Errorf("while decoding yaml file %s: %w", f, err)
-					}
-
-					for _, p := range preProcessors {
-						err = p(obj)
-						if err != nil {
-							return fmt.Errorf("while pre processing %s: %w", f, err)
-						}
-					}
-
-					iobj, err := in.interpolate(obj)
-					if err != nil {
-						return fmt.Errorf("while interpolating values into %s: %w", f, err)
-					}
-
-					for _, p := range postProcessors {
-						err = p(iobj)
-						if err != nil {
-							return fmt.Errorf("while post processing %s: %w", f, err)
-						}
-					}
-
-					err = enc.Encode(iobj)
-					if err != nil {
-						return fmt.Errorf("while encoding interpolated manifests: %w", err)
-					}
-
-				}
-
+			if err != nil {
+				return fmt.Errorf("could not generate manifests: %w", err)
 			}
 			return nil
+		},
+		Commands: []*cli.Command{
+			&cli.Command{
+				Name: "init",
+				Action: func(c *cli.Context) error {
+					return nil
+				},
+			},
 		},
 	}
 	app.RunAndExitOnError()
 }
 
-type interpolator struct {
-	vm *goja.Runtime
-}
-
-func (in *interpolator) interpolate(o interface{}) (interface{}, error) {
-
-	switch v := o.(type) {
-	case map[string]interface{}:
-		nm := make(map[string]interface{}, len(v))
-		for mk, mv := range v {
-			nv, err := in.interpolate(mv)
-			if err != nil {
-				return nil, fmt.Errorf("while interpolating map value for key %q: %w", mk, err)
-			}
-			nm[mk] = nv
-		}
-		return nm, nil
-	case []interface{}:
-		ns := make([]interface{}, len(v))
-		for i, sv := range v {
-			nv, err := in.interpolate(sv)
-			if err != nil {
-				return nil, fmt.Errorf("while interpolating slice value with index %d: %w", i, err)
-			}
-			ns[i] = nv
-		}
-		return ns, nil
-	case string:
-		if strings.HasPrefix(v, "$$JS:") {
-			return in.interpolateJS(v[len("$$JS:"):])
-		}
-		return envsubst.EvalEnv(v)
-	default:
-		return o, nil
-	}
-}
-
-func (i *interpolator) interpolateJS(code string) (res interface{}, err error) {
-	defer func() {
-		p := recover()
-		if p != nil {
-			var ok bool
-			err, ok = p.(error)
-			if !ok {
-				err = fmt.Errorf("panic: %s", p)
-			}
-		}
-		if err != nil {
-			err = fmt.Errorf("while interpolating JS %q: %w", code, err)
-		}
-	}()
-
-	resVal, err := i.vm.RunString(code)
+func findDotManifestorDir(path string) (string, error) {
+	fullPath, err := filepath.Abs(path)
 	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("could not get full path of %s: %w", path, err)
 	}
 
-	return resVal.Export(), nil
+	for {
+
+		dotManifestor := filepath.Join(fullPath, ".manifestor")
+		st, err := os.Stat(dotManifestor)
+
+		if os.IsNotExist(err) {
+			parent := filepath.Dir(fullPath)
+
+			if parent == fullPath {
+				return "", fmt.Errorf("could not find .manifestor directory in any parent of %s", fullPath)
+			}
+
+			fullPath = parent
+			continue
+
+		}
+
+		if err != nil {
+			return "", err
+		}
+
+		if st.IsDir() {
+			return dotManifestor, nil
+		}
+
+	}
 }
